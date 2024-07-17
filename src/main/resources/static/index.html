@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebRTC Example</title>
+    <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script> <!-- 추가된 폴리필 -->
+</head>
+<body>
+<h1>WebRTC Example</h1>
+<video id="localVideo" autoplay playsinline muted></video>
+<video id="remoteVideo" autoplay playsinline></video>
+<script>
+    const localVideo = document.getElementById('localVideo');
+    const remoteVideo = document.getElementById('remoteVideo');
+    const signalingUrl = 'ws://' + window.location.host + '/signal';
+    const ws = new WebSocket(signalingUrl);
+    let localStream;
+    let localPeerConnection;
+    let remotePeerConnection;
+
+    // 먼저 함수들을 선언합니다.
+    const createPeerConnection = () => {
+        const pc = new RTCPeerConnection();
+        pc.onicecandidate = (event) => {
+            if (event.candidate) {
+                ws.send(JSON.stringify({ type: 'candidate', candidate: event.candidate }));
+            }
+        };
+        pc.ontrack = (event) => {
+            remoteVideo.srcObject = event.streams[0];
+        };
+        localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+        return pc;
+    };
+
+    const createOffer = () => {
+        localPeerConnection = createPeerConnection();
+        localPeerConnection.createOffer()
+            .then(offer => localPeerConnection.setLocalDescription(offer))
+            .then(() => ws.send(JSON.stringify({ type: 'offer', offer: localPeerConnection.localDescription })));
+    };
+
+    const handleOffer = (data) => {
+        remotePeerConnection = createPeerConnection();
+        remotePeerConnection.setRemoteDescription(new RTCSessionDescription(data.offer))
+            .then(() => remotePeerConnection.createAnswer())
+            .then(answer => remotePeerConnection.setLocalDescription(answer))
+            .then(() => ws.send(JSON.stringify({ type: 'answer', answer: remotePeerConnection.localDescription })));
+    };
+
+    const handleAnswer = (data) => {
+        localPeerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+    };
+
+    const handleCandidate = (data) => {
+        const candidate = new RTCIceCandidate(data.candidate);
+        if (localPeerConnection) {
+            localPeerConnection.addIceCandidate(candidate);
+        } else if (remotePeerConnection) {
+            remotePeerConnection.addIceCandidate(candidate);
+        }
+    };
+
+    // WebSocket 메시지 핸들러를 선언된 함수들 아래에 위치시킵니다.
+    ws.onmessage = (message) => {
+        const data = JSON.parse(message.data);
+        switch (data.type) {
+            case 'offer':
+                handleOffer(data);
+                break;
+            case 'answer':
+                handleAnswer(data);
+                break;
+            case 'candidate':
+                handleCandidate(data);
+                break;
+            default:
+                break;
+        }
+    };
+
+    // getUserMedia 호환성을 체크합니다.
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+            .then(stream => {
+                localStream = stream;
+                localVideo.srcObject = stream;
+                createOffer();
+            })
+            .catch(error => console.error('Error accessing media devices.', error));
+    } else {
+        console.error('getUserMedia is not supported in this browser.');
+    }
+</script>
+</body>
+</html>
